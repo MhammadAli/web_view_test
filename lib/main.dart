@@ -40,7 +40,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       // 1. Listen for hidden JavaScript errors
       ..setOnConsoleMessage((JavaScriptConsoleMessage message) {
-        debugPrint('WEBVIEW_JS_LOG: [${message.level.name}] ${message.message}');
+        debugPrint(
+          'WEBVIEW_JS_LOG: [${message.level.name}] ${message.message}',
+        );
       })
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -50,10 +52,27 @@ class _WebViewScreenState extends State<WebViewScreen> {
           // 2. Inject CSS to force iOS to recognize taps on jQuery/Angular lists
           onPageFinished: (String url) {
             _controller.runJavaScript('''
+              // 1. Fix the main wrapper
               var style = document.createElement('style');
               style.innerHTML = '* { cursor: pointer !important; touch-action: manipulation !important; }';
               document.head.appendChild(style);
-              console.log("Flutter injected iOS touch fix.");
+              console.log("Flutter applied touch fix to main wrapper.");
+
+              // 2. Penetrate the iframe to fix the actual buttons
+              setTimeout(function() {
+                var iframes = document.getElementsByTagName('iframe');
+                for (var i = 0; i < iframes.length; i++) {
+                  try {
+                    var frameDoc = iframes[i].contentDocument || iframes[i].contentWindow.document;
+                    var frameStyle = frameDoc.createElement('style');
+                    frameStyle.innerHTML = '* { cursor: pointer !important; touch-action: manipulation !important; }';
+                    frameDoc.head.appendChild(frameStyle);
+                    console.log("Flutter successfully penetrated iframe and applied touch fix.");
+                  } catch(e) {
+                    console.log("Could not penetrate iframe (possible cross-origin block): " + e.message);
+                  }
+                }
+              }, 1500); // Wait 1.5 seconds to ensure iframe content is fully loaded
             ''');
           },
           onWebResourceError: (WebResourceError error) {
@@ -72,7 +91,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
         child: WebViewWidget(
           controller: _controller,
           gestureRecognizers: {
-            Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
+            Factory<OneSequenceGestureRecognizer>(
+              () => EagerGestureRecognizer(),
+            ),
           },
         ),
       ),
