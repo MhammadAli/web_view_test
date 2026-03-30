@@ -115,6 +115,9 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     var touchStartY = 0;
                     var TOUCH_THRESHOLD = 10; // px tolerance for finger movement
 
+                    // Elements that already handle clicks natively on iOS - DO NOT double-fire
+                    var NATIVE_INTERACTIVE = ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'];
+
                     doc.addEventListener('touchstart', function(e) {
                       if (e.touches.length === 1) {
                         touchStartTarget = e.target;
@@ -128,6 +131,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
                     doc.addEventListener('touchend', function(e) {
                       if (!touchStartTarget) return;
+                      var target = touchStartTarget;
+                      touchStartTarget = null;
+
+                      // Skip natively interactive elements (they handle clicks on their own)
+                      if (NATIVE_INTERACTIVE.indexOf(target.tagName) >= 0) {
+                        console.log('[iOS-Skip] ' + label + ': native element ' + target.tagName);
+                        return;
+                      }
 
                       var touch = e.changedTouches[0];
                       var dx = Math.abs(touch.clientX - touchStartX);
@@ -135,27 +146,41 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
                       // Only synthesize click if finger didn't move (it's a tap, not a scroll)
                       if (dx < TOUCH_THRESHOLD && dy < TOUCH_THRESHOLD) {
-                        var target = touchStartTarget;
 
-                        // Walk up to find the nearest element with ng-click or onclick handler
+                        // Walk up to find the nearest element with ng-click
                         var clickTarget = target;
-                        var maxWalk = 5;
+                        var maxWalk = 10;
+                        var ngClickExpr = null;
                         while (clickTarget && maxWalk > 0) {
-                          if (clickTarget.getAttribute && (
-                              clickTarget.getAttribute('ng-click') ||
-                              clickTarget.getAttribute('data-ng-click') ||
-                              clickTarget.getAttribute('onclick') !== '' ||
-                              clickTarget.tagName === 'A' ||
-                              clickTarget.tagName === 'BUTTON' ||
-                              clickTarget.tagName === 'INPUT')) {
-                            break;
+                          if (clickTarget.getAttribute) {
+                            ngClickExpr = clickTarget.getAttribute('ng-click') ||
+                                          clickTarget.getAttribute('data-ng-click');
+                            if (ngClickExpr) break;
                           }
                           clickTarget = clickTarget.parentElement;
                           maxWalk--;
                         }
                         if (!clickTarget) clickTarget = target;
 
-                        // Synthesize and dispatch a real click event
+                        // Strategy 1: Direct AngularJS scope invocation (most reliable)
+                        if (ngClickExpr && typeof doc.defaultView.angular !== 'undefined') {
+                          try {
+                            var angularEl = doc.defaultView.angular.element(clickTarget);
+                            var scope = angularEl.scope();
+                            if (scope) {
+                              scope.\$apply(function() {
+                                scope.\$eval(ngClickExpr);
+                              });
+                              console.log('[iOS-AngularClick] ' + label + ': applied ' + ngClickExpr + ' on ' +
+                                clickTarget.tagName + (clickTarget.id ? '#' + clickTarget.id : ''));
+                              return;
+                            }
+                          } catch(ae) {
+                            console.log('[iOS-AngularClick] Error: ' + ae.message);
+                          }
+                        }
+
+                        // Strategy 2: Fallback - dispatch click + try to trigger digest
                         var clickEvent = new MouseEvent('click', {
                           bubbles: true,
                           cancelable: true,
@@ -164,13 +189,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
                           clientY: touch.clientY
                         });
                         clickTarget.dispatchEvent(clickEvent);
+
+                        // Force AngularJS digest after synthetic event
+                        if (typeof doc.defaultView.angular !== 'undefined') {
+                          try {
+                            var rs = doc.defaultView.angular.element(doc.body).injector().get('\$rootScope');
+                            if (rs && !rs.\$\$phase) {
+                              rs.\$apply();
+                              console.log('[iOS-DigestForce] ' + label + ': forced digest after click');
+                            }
+                          } catch(de) {
+                            console.log('[iOS-DigestForce] Error: ' + de.message);
+                          }
+                        }
+
                         console.log('[iOS-SyntheticClick] ' + label + ': dispatched click on ' +
                           clickTarget.tagName +
                           (clickTarget.id ? '#' + clickTarget.id : '') +
-                          (clickTarget.getAttribute && clickTarget.getAttribute('ng-click') ?
-                            ' [ng-click=' + clickTarget.getAttribute('ng-click') + ']' : ''));
+                          (ngClickExpr ? ' [ng-click=' + ngClickExpr + ']' : ''));
                       }
-                      touchStartTarget = null;
                     }, true);
 
                     console.log("[iOS-Fix] Patched " + patched + " elements in [" + label + "]");
