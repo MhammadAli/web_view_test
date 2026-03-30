@@ -38,20 +38,26 @@ class _WebViewScreenState extends State<WebViewScreen> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      // 1. Listen for hidden JavaScript errors
+      ..setOnConsoleMessage((JavaScriptConsoleMessage message) {
+        debugPrint('WEBVIEW_JS_LOG: [${message.level.name}] ${message.message}');
+      })
       ..setNavigationDelegate(
         NavigationDelegate(
           onNavigationRequest: (NavigationRequest request) {
-            // Allow all internal routing and popup attempts
             return NavigationDecision.navigate;
           },
+          // 2. Inject CSS to force iOS to recognize taps on jQuery/Angular lists
+          onPageFinished: (String url) {
+            _controller.runJavaScript('''
+              var style = document.createElement('style');
+              style.innerHTML = '* { cursor: pointer !important; touch-action: manipulation !important; }';
+              document.head.appendChild(style);
+              console.log("Flutter injected iOS touch fix.");
+            ''');
+          },
           onWebResourceError: (WebResourceError error) {
-            debugPrint('''
-              Page resource error:
-              code: ${error.errorCode}
-              description: ${error.description}
-              errorType: ${error.errorType}
-              isForMainFrame: ${error.isForMainFrame}
-          ''');
+            debugPrint('WEBVIEW_NATIVE_ERROR: ${error.description}');
           },
         ),
       )
@@ -65,7 +71,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
       body: SafeArea(
         child: WebViewWidget(
           controller: _controller,
-          // This forces the WebView to claim all touch events immediately
           gestureRecognizers: {
             Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
           },
