@@ -107,11 +107,70 @@ class _WebViewScreenState extends State<WebViewScreen> {
                       observer.observe(doc.body, {childList: true, subtree: true});
                     }
 
-                    // 5. Touch diagnostic logger (remove after debugging)
+                    // 5. Synthetic click dispatcher (FastClick-style)
+                    // iOS WKWebView registers touchstart but fails to synthesize click.
+                    // This bridges the gap for AngularJS ng-click and jQuery .on('click').
+                    var touchStartTarget = null;
+                    var touchStartX = 0;
+                    var touchStartY = 0;
+                    var TOUCH_THRESHOLD = 10; // px tolerance for finger movement
+
                     doc.addEventListener('touchstart', function(e) {
+                      if (e.touches.length === 1) {
+                        touchStartTarget = e.target;
+                        touchStartX = e.touches[0].clientX;
+                        touchStartY = e.touches[0].clientY;
+                      }
                       console.log('[iOS-Touch] ' + label + ': ' + e.target.tagName +
                         (e.target.id ? '#' + e.target.id : '') +
                         (e.target.className ? '.' + e.target.className.split(' ')[0] : ''));
+                    }, true);
+
+                    doc.addEventListener('touchend', function(e) {
+                      if (!touchStartTarget) return;
+
+                      var touch = e.changedTouches[0];
+                      var dx = Math.abs(touch.clientX - touchStartX);
+                      var dy = Math.abs(touch.clientY - touchStartY);
+
+                      // Only synthesize click if finger didn't move (it's a tap, not a scroll)
+                      if (dx < TOUCH_THRESHOLD && dy < TOUCH_THRESHOLD) {
+                        var target = touchStartTarget;
+
+                        // Walk up to find the nearest element with ng-click or onclick handler
+                        var clickTarget = target;
+                        var maxWalk = 5;
+                        while (clickTarget && maxWalk > 0) {
+                          if (clickTarget.getAttribute && (
+                              clickTarget.getAttribute('ng-click') ||
+                              clickTarget.getAttribute('data-ng-click') ||
+                              clickTarget.getAttribute('onclick') !== '' ||
+                              clickTarget.tagName === 'A' ||
+                              clickTarget.tagName === 'BUTTON' ||
+                              clickTarget.tagName === 'INPUT')) {
+                            break;
+                          }
+                          clickTarget = clickTarget.parentElement;
+                          maxWalk--;
+                        }
+                        if (!clickTarget) clickTarget = target;
+
+                        // Synthesize and dispatch a real click event
+                        var clickEvent = new MouseEvent('click', {
+                          bubbles: true,
+                          cancelable: true,
+                          view: doc.defaultView,
+                          clientX: touch.clientX,
+                          clientY: touch.clientY
+                        });
+                        clickTarget.dispatchEvent(clickEvent);
+                        console.log('[iOS-SyntheticClick] ' + label + ': dispatched click on ' +
+                          clickTarget.tagName +
+                          (clickTarget.id ? '#' + clickTarget.id : '') +
+                          (clickTarget.getAttribute && clickTarget.getAttribute('ng-click') ?
+                            ' [ng-click=' + clickTarget.getAttribute('ng-click') + ']' : ''));
+                      }
+                      touchStartTarget = null;
                     }, true);
 
                     console.log("[iOS-Fix] Patched " + patched + " elements in [" + label + "]");
