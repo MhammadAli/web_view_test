@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 
 void main() {
   runApp(const MyApp());
@@ -36,6 +38,23 @@ class _WebViewScreenState extends State<WebViewScreen> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onNavigationRequest: (NavigationRequest request) {
+            // Allow all internal routing and popup attempts
+            return NavigationDecision.navigate;
+          },
+          onWebResourceError: (WebResourceError error) {
+            debugPrint('''
+              Page resource error:
+              code: ${error.errorCode}
+              description: ${error.description}
+              errorType: ${error.errorType}
+              isForMainFrame: ${error.isForMainFrame}
+          ''');
+          },
+        ),
+      )
       ..loadRequest(Uri.parse(targetUrl));
   }
 
@@ -43,7 +62,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('iOS WebView Test')),
-      body: SafeArea(child: WebViewWidget(controller: _controller)),
+      body: SafeArea(
+        child: WebViewWidget(
+          controller: _controller,
+          // This forces the WebView to claim all touch events immediately
+          gestureRecognizers: {
+            Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
+          },
+        ),
+      ),
     );
   }
 }
