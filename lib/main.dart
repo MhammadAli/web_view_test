@@ -49,30 +49,129 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onNavigationRequest: (NavigationRequest request) {
             return NavigationDecision.navigate;
           },
-          // 2. Inject CSS to force iOS to recognize taps on jQuery/Angular lists
+          // 2. Inject the definitive iOS touch fix
           onPageFinished: (String url) {
             _controller.runJavaScript('''
-              // 1. Fix the main wrapper
-              var style = document.createElement('style');
-              style.innerHTML = '* { cursor: pointer !important; touch-action: manipulation !important; }';
-              document.head.appendChild(style);
-              console.log("Flutter applied touch fix to main wrapper.");
+              (function() {
+                // === iOS Touch Fix ===
+                // On iOS WKWebView, non-interactive elements (div, li, tr, td, span)
+                // do NOT fire "click" events unless they have an onclick attribute.
+                // cursor:pointer does NOTHING on iOS (no cursor on touch devices).
+                // This is the definitive fix for AngularJS ng-click / jQuery delegated events.
 
-              // 2. Penetrate the iframe to fix the actual buttons
-              setTimeout(function() {
-                var iframes = document.getElementsByTagName('iframe');
-                for (var i = 0; i < iframes.length; i++) {
+                function applyIOSTouchFix(doc, label) {
                   try {
-                    var frameDoc = iframes[i].contentDocument || iframes[i].contentWindow.document;
-                    var frameStyle = frameDoc.createElement('style');
-                    frameStyle.innerHTML = '* { cursor: pointer !important; touch-action: manipulation !important; }';
-                    frameDoc.head.appendChild(frameStyle);
-                    console.log("Flutter successfully penetrated iframe and applied touch fix.");
+                    if (!doc || !doc.body) {
+                      console.log("[iOS-Fix] Skipping " + label + " - no body yet");
+                      return false;
+                    }
+
+                    // 1. Add empty onclick="" to all non-interactive elements
+                    var selectors = 'div, li, tr, td, th, span, label, p, section, article, ul, ol, dl, dt, dd, a, img';
+                    var allEls = doc.querySelectorAll(selectors);
+                    var patched = 0;
+                    for (var i = 0; i < allEls.length; i++) {
+                      if (!allEls[i].getAttribute('onclick')) {
+                        allEls[i].setAttribute('onclick', '');
+                        patched++;
+                      }
+                    }
+
+                    // 2. Force WKWebView touch responder chain registration
+                    doc.addEventListener('touchstart', function(){}, {passive: true});
+
+                    // 3. Touch-action CSS to prevent 300ms delay
+                    var style = doc.createElement('style');
+                    style.innerHTML = '* { touch-action: manipulation !important; -webkit-tap-highlight-color: transparent; }';
+                    if (doc.head) doc.head.appendChild(style);
+
+                    // 4. MutationObserver for dynamically rendered content (AngularJS)
+                    if (doc.body) {
+                      var observer = new MutationObserver(function(mutations) {
+                        mutations.forEach(function(m) {
+                          m.addedNodes.forEach(function(node) {
+                            if (node.nodeType === 1) {
+                              if (!node.getAttribute('onclick')) {
+                                node.setAttribute('onclick', '');
+                              }
+                              var children = node.querySelectorAll(selectors);
+                              for (var j = 0; j < children.length; j++) {
+                                if (!children[j].getAttribute('onclick')) {
+                                  children[j].setAttribute('onclick', '');
+                                }
+                              }
+                            }
+                          });
+                        });
+                      });
+                      observer.observe(doc.body, {childList: true, subtree: true});
+                    }
+
+                    // 5. Touch diagnostic logger (remove after debugging)
+                    doc.addEventListener('touchstart', function(e) {
+                      console.log('[iOS-Touch] ' + label + ': ' + e.target.tagName +
+                        (e.target.id ? '#' + e.target.id : '') +
+                        (e.target.className ? '.' + e.target.className.split(' ')[0] : ''));
+                    }, true);
+
+                    console.log("[iOS-Fix] Patched " + patched + " elements in [" + label + "]");
+                    return true;
                   } catch(e) {
-                    console.log("Could not penetrate iframe (possible cross-origin block): " + e.message);
+                    console.log("[iOS-Fix] Error in " + label + ": " + e.message);
+                    return false;
                   }
                 }
-              }, 1500); // Wait 1.5 seconds to ensure iframe content is fully loaded
+
+                // Fix main document immediately
+                applyIOSTouchFix(document, "main");
+
+                // Retry iframe penetration with exponential backoff
+                var attempts = 0;
+                var maxAttempts = 10;
+
+                function tryFixIframes() {
+                  var iframes = document.getElementsByTagName('iframe');
+                  var fixedCount = 0;
+
+                  for (var i = 0; i < iframes.length; i++) {
+                    try {
+                      var fd = iframes[i].contentDocument || iframes[i].contentWindow.document;
+                      if (fd && fd.body && fd.body.children.length > 0) {
+                        applyIOSTouchFix(fd, "iframe-" + i);
+                        fixedCount++;
+
+                        // Also check for nested iframes inside this iframe
+                        var nestedIframes = fd.getElementsByTagName('iframe');
+                        for (var j = 0; j < nestedIframes.length; j++) {
+                          try {
+                            var nfd = nestedIframes[j].contentDocument || nestedIframes[j].contentWindow.document;
+                            if (nfd && nfd.body) {
+                              applyIOSTouchFix(nfd, "nested-iframe-" + i + "-" + j);
+                            }
+                          } catch(ne) {
+                            console.log("[iOS-Fix] Nested iframe cross-origin: " + ne.message);
+                          }
+                        }
+                      }
+                    } catch(e) {
+                      console.log("[iOS-Fix] Iframe " + i + " cross-origin blocked: " + e.message);
+                    }
+                  }
+
+                  attempts++;
+                  console.log("[iOS-Fix] Iframe attempt " + attempts + "/" + maxAttempts + " - fixed: " + fixedCount + " of " + iframes.length);
+
+                  // Retry with increasing delay if iframes exist but weren't ready
+                  if (iframes.length > 0 && fixedCount < iframes.length && attempts < maxAttempts) {
+                    var delay = Math.min(500 * Math.pow(1.5, attempts), 5000);
+                    console.log("[iOS-Fix] Retrying in " + Math.round(delay) + "ms...");
+                    setTimeout(tryFixIframes, delay);
+                  }
+                }
+
+                // Start iframe fix after a short initial delay
+                setTimeout(tryFixIframes, 500);
+              })();
             ''');
           },
           onWebResourceError: (WebResourceError error) {
