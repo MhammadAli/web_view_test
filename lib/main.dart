@@ -38,25 +38,21 @@ class _WebViewScreenState extends State<WebViewScreen> {
       if (window.__iosTouchFixApplied) return;
       window.__iosTouchFixApplied = true;
 
+      // 1. Add onclick handlers to force WKWebView to recognize elements as interactive
       var selectors = 'div, li, tr, td, th, span, label, p, section, article, ul, ol, dl, dt, dd, a, img';
       var allEls = document.querySelectorAll(selectors);
-      var patched = 0;
       for (var i = 0; i < allEls.length; i++) {
         if (!allEls[i].getAttribute('onclick')) {
           allEls[i].setAttribute('onclick', '');
-          patched++;
         }
       }
 
-      // Force WKWebView touch responder chain registration
-      document.addEventListener('touchstart', function(){}, {passive: true});
-
-      // Touch-action CSS to prevent 300ms delay
+      // 2. CSS touch-action to prevent 300ms delay and highlight mapping
       var style = document.createElement('style');
       style.innerHTML = '* { touch-action: manipulation !important; -webkit-tap-highlight-color: transparent; }';
       if (document.head) document.head.appendChild(style);
 
-      // MutationObserver for dynamically rendered AngularJS content
+      // 3. MutationObserver for dynamically rendered AngularJS content
       if (document.body) {
         var observer = new MutationObserver(function(mutations) {
           mutations.forEach(function(m) {
@@ -74,16 +70,78 @@ class _WebViewScreenState extends State<WebViewScreen> {
         observer.observe(document.body, {childList: true, subtree: true});
       }
 
-      // Touch diagnostic logger
-      document.addEventListener('touchstart', function(e) {
-        var loc = window === window.top ? 'main' : 'iframe';
-        console.log('[iOS-Touch] ' + loc + ': ' + e.target.tagName +
-          (e.target.id ? '#' + e.target.id : '') +
-          (e.target.className ? '.' + String(e.target.className).split(' ')[0] : ''));
-      }, true);
+      // 4. FastClick-style synthetic click dispatcher bridging the WKWebView gap
+      var touchStartTarget = null;
+      var touchStartX = 0;
+      var touchStartY = 0;
+      var TOUCH_THRESHOLD = 10;
+      var NATIVE_INTERACTIVE = ['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'A'];
 
-      var loc = window === window.top ? 'main' : 'iframe';
-      console.log('[iOS-Fix] Patched ' + patched + ' elements in [' + loc + '] via InAppWebView UserScript');
+      document.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 1) {
+          touchStartTarget = e.target;
+          touchStartX = e.touches[0].clientX;
+          touchStartY = e.touches[0].clientY;
+        }
+        var loc = window === window.top ? 'main' : 'iframe';
+        console.log('[iOS-Touch] ' + loc + ': ' + e.target.tagName + (e.target.id ? '#' + e.target.id : ''));
+      }, { passive: true });
+
+      document.addEventListener('touchend', function(e) {
+        if (!touchStartTarget) return;
+        var target = touchStartTarget;
+        touchStartTarget = null;
+
+        var touch = e.changedTouches[0];
+        if (!touch) return;
+        
+        var dx = Math.abs(touch.clientX - touchStartX);
+        var dy = Math.abs(touch.clientY - touchStartY);
+
+        // If movement is within threshold, it's a tap
+        if (dx < TOUCH_THRESHOLD && dy < TOUCH_THRESHOLD) {
+          
+          if (NATIVE_INTERACTIVE.indexOf(target.tagName) >= 0) {
+            return; // Let native components handle themselves natively
+          }
+
+          var loc = window === window.top ? 'main' : 'iframe';
+
+          // Prevent the browser's delayed native click 
+          if (e.cancelable) {
+            e.preventDefault();
+          }
+
+          // Dispatch native click on the exact target. 
+          // Event will bubble up to the ng-click listener naturally with exact proper scoping.
+          var clickEvent = new MouseEvent('click', {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX: touch.clientX,
+            clientY: touch.clientY
+          });
+          target.dispatchEvent(clickEvent);
+          console.log('[iOS-SyntheticClick] ' + loc + ': dispatched on ' + target.tagName + (target.id ? '#' + target.id : ''));
+
+          // Force AngularJS digest cycle manually to ensure the UI immediately realizes the click
+          if (typeof window.angular !== 'undefined') {
+            try {
+              var scope = window.angular.element(target).scope();
+              if (scope) {
+                var rootScope = scope.\$root;
+                if (rootScope && !rootScope.\$\$phase) {
+                  rootScope.\$apply();
+                  console.log('[iOS-DigestForce] ' + loc + ': forced digest cycle');
+                }
+              }
+            } catch(err) {
+              console.log('[iOS-DigestError] ' + loc + ': ' + err.message);
+            }
+          }
+        }
+      }, false); 
+      // Note: passive is false by default for touchend, which allows e.preventDefault()
     })();
   ''';
 
@@ -132,7 +190,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           // Console message logging
           onConsoleMessage: (controller, consoleMessage) {
             debugPrint(
-              'WEBVIEW_JS_LOG: [${consoleMessage.messageLevel.name}] ${consoleMessage.message}',
+              'WEBVIEW_JS_LOG: [${consoleMessage.messageLevel}] ${consoleMessage.message}',
             );
           },
           // Page finished loading
