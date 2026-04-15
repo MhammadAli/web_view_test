@@ -132,9 +132,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       appBar: AppBar(title: const Text('iOS WebView Test')),
       body: SafeArea(
         child: InAppWebView(
-          initialUrlRequest: URLRequest(
-            url: WebUri(targetUrl),
-          ),
+          initialUrlRequest: URLRequest(url: WebUri(targetUrl)),
           initialUserScripts: UnmodifiableListView<UserScript>([
             UserScript(
               source: _iosDateFixJS,
@@ -165,9 +163,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
             debugPrint('PAGE_FINISHED: $url');
           },
           onReceivedError: (controller, request, error) {
-            debugPrint(
-              'WEBVIEW_ERROR: ${error.description} (${request.url})',
-            );
+            debugPrint('WEBVIEW_ERROR: ${error.description} (${request.url})');
           },
         ),
       ),
